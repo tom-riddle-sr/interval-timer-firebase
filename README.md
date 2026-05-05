@@ -1,109 +1,126 @@
-# 間歇運動計時器 — Firebase 雲端版
+# Interval Timer
 
-iOS 風格的間歇訓練計時器，**Google 登入後**自動同步設定到雲端，並記錄每次訓練。
+An iOS-style web-based interval training timer with cloud sync and workout history.
 
-## 功能（在原版功能之上）
+**Live demo:** <https://tom-riddle-sr.github.io/interval-timer-firebase/>
 
-- **Google 一鍵登入**（Firebase Auth）
-- **跨裝置同步** — 階段、回合、開關設定即時同步到 Firestore
-- **訓練紀錄** — 每次完成的訓練自動寫入雲端
-- **統計儀表板** — 總訓練次數、總時間、連續天數、本週次數
-- **歷史紀錄列表** — 最近 100 筆，可單筆刪除
-- **離線可用** — 未登入時退化為 localStorage（同原版體驗）
+## Features
 
-## 檔案結構
+- **Multi-stage customization** — add, remove, drag-reorder; each stage has a name, duration, and color
+- **Round cycling** — 1 to 99 rounds per workout
+- **Sound cues** — countdown beeps for the last 3 seconds, transition bell, completion chord (Web Audio API)
+- **Voice prompts** — Traditional Chinese (zh-TW) speech announcements via SpeechSynthesis
+- **One-tap presets** — Tabata / HIIT / EMOM / Warm-up
+- **iOS-style UI** — rounded cards, dark mode, SF font, blur modal sheets, SVG progress ring
+- **Wake Lock** — keeps the screen on during a workout
+- **Keyboard shortcuts** — Space to pause, ←/→ to skip, Esc to exit
+- **Cloud sync** — Google sign-in syncs settings across devices via Firestore
+- **Workout history** — every completed session is logged automatically
+- **Stats dashboard** — total workouts, total time, current streak, weekly count
+- **Offline-friendly** — falls back to `localStorage` when not signed in
+
+## Tech Stack
+
+- **Frontend:** vanilla HTML / CSS / ES modules — no framework, no build step
+- **Auth:** Firebase Authentication (Google provider)
+- **Database:** Cloud Firestore (asia-east1)
+- **Hosting:** GitHub Pages
+- **CI/CD:** GitHub Actions (auto-deploy on push to `main`)
+
+## Project Structure
 
 ```
 interval-timer-firebase/
-├── index.html
-├── style.css
-├── app.js                      # 主邏輯（ES module）
-├── firebase.js                 # Firebase Auth + Firestore wrapper
-├── firestore.rules             # 安全規則（要貼到 Firebase Console）
-├── .github/workflows/deploy.yml
+├── index.html                      # Markup (3 screens + history + modal)
+├── style.css                       # iOS-style theming
+├── app.js                          # Timer logic, audio, voice, sync, history
+├── firebase.js                     # Firebase Auth + Firestore wrapper
+├── firestore.rules                 # Per-user security rules
+├── .github/workflows/deploy.yml    # GitHub Pages auto-deploy
 └── README.md
 ```
 
-## ⚠️ 上線前必做（Firebase Console）
+## Data Model (Firestore)
 
-### 1. 啟用 Authentication
-
-到 <https://console.firebase.google.com/> → 進專案 `interval-timer-cec3f` → **Build → Authentication**：
-
-- **Sign-in method** 啟用 **Google**
-
-### 2. 加入 Authorized domains
-
-仍在 Authentication → **Settings → Authorized domains**，**新增**：
-
-```
-tom-riddle-sr.github.io
-```
-
-（`localhost` 預設已包含。如果你還會用其他網域，也加進去。）
-
-### 3. 建立 Firestore Database
-
-**Build → Firestore Database → Create database**：
-
-- 模式：**Production mode**
-- 地區：**asia-east1**（或就近的）
-
-### 4. 套用安全規則
-
-進 Firestore → **Rules** 分頁，把 `firestore.rules` 的內容整段貼上去 → **Publish**：
-
-```js
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-  }
-}
-```
-
-這條規則確保每個使用者只能讀寫自己的資料。
-
-## 部署到 GitHub Pages
-
-跟原版一樣：
-
-```bash
-cd interval-timer-firebase
-gh repo create interval-timer-firebase --public --source=. --remote=origin --push
-gh api -X POST "repos/{owner}/{repo}/pages" -f build_type=workflow
-```
-
-或合併到既有的 repo 也可以（直接放在原 repo 下另一個資料夾，網址會是 `https://tom-riddle-sr.github.io/interval-timer/firebase/`）。
-
-## 資料模型（Firestore）
+Each authenticated user has a private document tree:
 
 ```
 users/{uid}/
-  meta/settings           # 階段、回合、開關
-  workouts/{auto}         # 每次訓練紀錄
-    - startedAt:  number   (epoch ms)
-    - completedAt: serverTimestamp
-    - durationSec: number
-    - rounds: number
-    - stages: [{ name, duration, color, phase }]
+├── meta/settings              # rounds, voice/sound toggles, stages[]
+└── workouts/{auto-id}         # one document per completed workout
+    ├── startedAt:    number   (epoch ms)
+    ├── completedAt:  serverTimestamp
+    ├── durationSec:  number
+    ├── rounds:       number
+    └── stages: [
+        { name, duration, color, phase }
+      ]
 ```
 
-## 鍵盤快捷鍵（執行中）
+Security rules ensure that only the matching user can read or write their own data:
 
-| 按鍵 | 動作 |
-|------|------|
-| Space | 暫停 / 繼續 |
-| → | 下一階段 |
-| ← | 上一階段 / 重置目前階段 |
-| Esc | 結束訓練 |
+```
+match /users/{uid}/{document=**} {
+  allow read, write: if request.auth != null && request.auth.uid == uid;
+}
+```
 
-## 安全性說明
+## Local Development
 
-`firebaseConfig` 中的 `apiKey` 是**前端公開金鑰**，本來就會出現在瀏覽器，不是機密。真正的安全靠 Firestore Rules + Authorized domains 限制。
+Just open `index.html` in a browser, or serve the folder:
 
-## 授權
+```bash
+python3 -m http.server 8080
+# then visit http://localhost:8080
+```
+
+The app works without sign-in — it simply uses `localStorage` instead of Firestore.
+
+## Deployment
+
+Every push to `main` triggers a GitHub Actions workflow that publishes the site to GitHub Pages within 1–2 minutes.
+
+```bash
+git add .
+git commit -m "your changes"
+git push
+```
+
+To watch the deploy:
+
+```bash
+gh run watch
+```
+
+## Setting Up Your Own Firebase Backend
+
+If you fork this and want your own Firebase project:
+
+1. **Create a Firebase project** at <https://console.firebase.google.com/>.
+2. **Add a Web app** under *Project settings → Your apps → `</>`*. Copy the `firebaseConfig` object.
+3. **Replace** the `firebaseConfig` in [`firebase.js`](./firebase.js) with your own.
+4. **Enable Google sign-in:** *Build → Authentication → Sign-in method → Google → Enable.*
+5. **Authorize your domain:** *Authentication → Settings → Authorized domains → add your GitHub Pages host* (e.g. `your-username.github.io`).
+6. **Create Firestore:** *Build → Firestore Database → Create database → Production mode → asia-east1*.
+7. **Apply security rules:** *Firestore → Rules → paste the contents of [`firestore.rules`](./firestore.rules) → Publish*.
+
+The `apiKey` in `firebaseConfig` is a **public web key** — it is safe to commit. Real protection comes from the security rules and authorized-domain list.
+
+## Keyboard Shortcuts (during a workout)
+
+| Key | Action |
+|-----|--------|
+| `Space` | Pause / Resume |
+| `→` | Next stage |
+| `←` | Previous stage / Restart current stage |
+| `Esc` | Exit workout |
+
+## Browser Requirements
+
+- Modern Chrome / Safari / Edge / Firefox
+- Voice prompts require the `SpeechSynthesis` API (built into all major browsers)
+- Screen-wake requires the Wake Lock API (supported on most mobile browsers)
+
+## License
 
 MIT
