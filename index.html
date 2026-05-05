@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
+  <title>間歇運動計時器 — Cloud</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ============ 設定畫面 ============ -->
+    <section id="setupScreen" class="screen active">
+      <header class="app-header">
+        <div class="header-row">
+          <div>
+            <h1>間歇計時器</h1>
+            <p class="subtitle">雲端同步 · 訓練紀錄</p>
+          </div>
+          <div id="authArea" class="auth-area">
+            <button id="signInBtn" class="auth-btn">登入</button>
+            <div id="userBadge" class="user-badge" hidden>
+              <img id="userAvatar" alt="" />
+              <span id="userName"></span>
+              <button id="signOutBtn" class="auth-link">登出</button>
+            </div>
+          </div>
+        </div>
+        <div id="syncStatus" class="sync-status"></div>
+      </header>
+
+      <div class="card">
+        <div class="card-row">
+          <label for="roundsInput">循環回合</label>
+          <div class="stepper">
+            <button class="stepper-btn" data-action="rounds-minus" aria-label="減少">−</button>
+            <input id="roundsInput" type="number" min="1" max="99" value="3" inputmode="numeric" />
+            <button class="stepper-btn" data-action="rounds-plus" aria-label="增加">＋</button>
+          </div>
+        </div>
+        <div class="card-divider"></div>
+        <div class="card-row toggle-row">
+          <label for="voiceToggle">語音播報</label>
+          <label class="switch">
+            <input id="voiceToggle" type="checkbox" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="card-divider"></div>
+        <div class="card-row toggle-row">
+          <label for="soundToggle">音效提示</label>
+          <label class="switch">
+            <input id="soundToggle" type="checkbox" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <h2>階段</h2>
+        <span class="hint">點擊編輯 · 拖曳排序</span>
+      </div>
+
+      <ul id="stagesList" class="stages-list"></ul>
+
+      <button id="addStageBtn" class="btn-secondary">＋ 新增階段</button>
+
+      <div class="totals-card">
+        <div>
+          <span class="totals-label">每回合</span>
+          <span id="roundDuration" class="totals-value">0:00</span>
+        </div>
+        <div>
+          <span class="totals-label">總時間</span>
+          <span id="totalDuration" class="totals-value">0:00</span>
+        </div>
+      </div>
+
+      <button id="startBtn" class="btn-primary">開始</button>
+      <button id="historyBtn" class="btn-secondary">歷史紀錄</button>
+
+      <div class="presets">
+        <button class="preset-btn" data-preset="tabata">Tabata</button>
+        <button class="preset-btn" data-preset="hiit">HIIT</button>
+        <button class="preset-btn" data-preset="emom">EMOM</button>
+        <button class="preset-btn" data-preset="warmup">熱身</button>
+      </div>
+    </section>
+
+    <!-- ============ 執行畫面 ============ -->
+    <section id="runScreen" class="screen">
+      <div class="run-top">
+        <button id="exitBtn" class="icon-btn" aria-label="返回">✕</button>
+        <div class="round-indicator">
+          回合 <span id="currentRound">1</span> / <span id="totalRounds">1</span>
+        </div>
+      </div>
+
+      <div class="run-stage-name" id="runStageName">準備</div>
+
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 200 200">
+          <circle class="ring-bg" cx="100" cy="100" r="92" />
+          <circle id="ringProgress" class="ring-progress" cx="100" cy="100" r="92" />
+        </svg>
+        <div class="time-display">
+          <span id="timeRemaining">00:00</span>
+          <small id="nextStageHint" class="next-hint">—</small>
+        </div>
+      </div>
+
+      <div class="run-controls">
+        <button id="prevBtn" class="control-btn" aria-label="上一階段">⏮</button>
+        <button id="pauseBtn" class="control-btn primary" aria-label="暫停">⏸</button>
+        <button id="nextBtn" class="control-btn" aria-label="下一階段">⏭</button>
+      </div>
+    </section>
+
+    <!-- ============ 完成畫面 ============ -->
+    <section id="doneScreen" class="screen">
+      <div class="done-content">
+        <div class="done-emoji">完成</div>
+        <h2>訓練結束</h2>
+        <p id="doneSummary" class="done-summary">總時間 0:00</p>
+        <p id="doneSaveStatus" class="done-save-status"></p>
+        <button id="doneBackBtn" class="btn-primary">回設定</button>
+      </div>
+    </section>
+
+    <!-- ============ 歷史紀錄畫面 ============ -->
+    <section id="historyScreen" class="screen">
+      <div class="run-top">
+        <button id="historyBackBtn" class="icon-btn" aria-label="返回">←</button>
+        <div class="round-indicator">歷史紀錄</div>
+        <span style="width: 36px"></span>
+      </div>
+
+      <div id="historyStats" class="stats-grid">
+        <div class="stat-tile">
+          <span class="stat-label">總訓練</span>
+          <span id="statCount" class="stat-value">0</span>
+          <span class="stat-unit">次</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">總時間</span>
+          <span id="statTotal" class="stat-value">0</span>
+          <span class="stat-unit">分鐘</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">連續</span>
+          <span id="statStreak" class="stat-value">0</span>
+          <span class="stat-unit">天</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">本週</span>
+          <span id="statWeek" class="stat-value">0</span>
+          <span class="stat-unit">次</span>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <h2>最近紀錄</h2>
+      </div>
+      <div id="historyEmpty" class="empty-state" hidden>
+        <p>還沒有訓練紀錄</p>
+        <p class="hint">完成第一次訓練就會自動記錄</p>
+      </div>
+      <ul id="historyList" class="history-list"></ul>
+    </section>
+  </div>
+
+  <!-- 階段編輯 modal -->
+  <div id="stageModal" class="modal" hidden>
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <h3 id="stageModalTitle">編輯階段</h3>
+      <label class="field-label">名稱</label>
+      <input id="stageNameInput" type="text" maxlength="12" placeholder="例：高強度" />
+      <label class="field-label">時間 (秒)</label>
+      <div class="stepper">
+        <button class="stepper-btn" data-action="dur-minus" aria-label="減少">−</button>
+        <input id="stageDurationInput" type="number" min="1" max="3600" value="30" inputmode="numeric" />
+        <button class="stepper-btn" data-action="dur-plus" aria-label="增加">＋</button>
+      </div>
+      <label class="field-label">顏色</label>
+      <div id="colorPicker" class="color-picker"></div>
+      <div class="modal-actions">
+        <button id="stageCancelBtn" class="btn-secondary">取消</button>
+        <button id="stageSaveBtn" class="btn-primary">儲存</button>
+      </div>
+      <button id="stageDeleteBtn" class="btn-danger" hidden>刪除階段</button>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
