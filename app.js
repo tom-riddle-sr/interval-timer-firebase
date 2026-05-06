@@ -106,6 +106,7 @@ const colorPicker = $("#colorPicker");
 const stageSaveBtn = $("#stageSaveBtn");
 const stageCancelBtn = $("#stageCancelBtn");
 const stageDeleteBtn = $("#stageDeleteBtn");
+const stageDuplicateBtn = $("#stageDuplicateBtn");
 const stageModalTitle = $("#stageModalTitle");
 
 const signInBtn = $("#signInBtn");
@@ -397,12 +398,14 @@ function openStageModal(stage) {
     stageDurationInput.value = stage.duration;
     selectColor(stage.color);
     stageDeleteBtn.hidden = state.stages.length <= 1;
+    stageDuplicateBtn.hidden = false;
   } else {
     stageModalTitle.textContent = "新增階段";
     stageNameInput.value = "";
     stageDurationInput.value = 30;
     selectColor(COLORS[Math.floor(Math.random() * COLORS.length)]);
     stageDeleteBtn.hidden = true;
+    stageDuplicateBtn.hidden = true;
   }
   stageModal.hidden = false;
   setTimeout(() => stageNameInput.focus(), 100);
@@ -464,6 +467,27 @@ function bindModalEvents() {
     if (!editingStage) return;
     if (state.stages.length <= 1) return;
     state.stages = state.stages.filter(s => s.id !== editingStage.id);
+    persist();
+    renderStages();
+    updateTotals();
+    closeStageModal();
+  });
+
+  stageDuplicateBtn.addEventListener("click", () => {
+    if (!editingStage) return;
+    // 用目前 modal 上的值作為複製來源（未存的編輯也會被帶過去）
+    const name = stageNameInput.value.trim() || editingStage.name;
+    const duration = clamp(+stageDurationInput.value || editingStage.duration, 1, 3600);
+    const color = getSelectedColor();
+    const phase = inferPhase(name, color);
+    const id = (state.stages.reduce((m, s) => Math.max(m, s.id), 0) || 0) + 1;
+    const newStage = { id, name, duration, color, phase };
+    const idx = state.stages.findIndex(s => s.id === editingStage.id);
+    if (idx >= 0) {
+      state.stages.splice(idx + 1, 0, newStage);
+    } else {
+      state.stages.push(newStage);
+    }
     persist();
     renderStages();
     updateTotals();

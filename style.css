@@ -574,6 +574,9 @@ body.phase-cooldown { --accent: #bf5af2; }
 .modal-actions .btn-secondary {
   margin: 0;
 }
+.modal-extra {
+  margin-top: 10px !important;
+}
 
 /* ===== Auth area (header) ===== */
 .header-row {
