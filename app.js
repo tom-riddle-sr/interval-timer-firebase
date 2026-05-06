@@ -568,6 +568,8 @@ function startRun() {
     tickerId: null,
     lastTick: 0,
     announcedSecond: -1,
+    halfAnnounced: false,
+    endingSoonAnnounced: false,
   };
   runStartedAt = Date.now();
   showScreen("run");
@@ -596,12 +598,33 @@ function tick(now) {
   runtime.lastTick = now;
   runtime.remaining -= dt;
 
+  const stage = state.stages[runtime.currentStageIdx];
   const remSec = Math.ceil(runtime.remaining);
+  const elapsed = stage.duration - runtime.remaining;
+
   if (remSec !== runtime.announcedSecond) {
     runtime.announcedSecond = remSec;
     if (remSec === 3 || remSec === 2 || remSec === 1) {
       beep(880, 0.1, 0.25);
     }
+  }
+
+  // 運動過半語音（只在 work 且階段 ≥ 20 秒，避免短階段太吵）
+  if (!runtime.halfAnnounced &&
+      stage.phase === "work" &&
+      stage.duration >= 20 &&
+      elapsed >= stage.duration / 2) {
+    runtime.halfAnnounced = true;
+    speak("過半");
+  }
+
+  // 休息/緩和快結束預告（剩 5 秒，且階段 ≥ 8 秒）
+  if (!runtime.endingSoonAnnounced &&
+      (stage.phase === "rest" || stage.phase === "cooldown") &&
+      stage.duration >= 8 &&
+      runtime.remaining <= 5 && runtime.remaining > 4) {
+    runtime.endingSoonAnnounced = true;
+    speak("準備");
   }
 
   if (runtime.remaining <= 0) {
@@ -627,6 +650,8 @@ function advanceStage() {
   const stage = state.stages[runtime.currentStageIdx];
   runtime.remaining = stage.duration;
   runtime.announcedSecond = -1;
+  runtime.halfAnnounced = false;
+  runtime.endingSoonAnnounced = false;
   bell();
   speakStageStart(stage);
   refreshRunUI(true);
@@ -737,6 +762,8 @@ function bindRunEvents() {
       runtime.remaining = state.stages[runtime.currentStageIdx].duration;
     }
     runtime.announcedSecond = -1;
+    runtime.halfAnnounced = false;
+    runtime.endingSoonAnnounced = false;
     bell();
     speakStageStart(state.stages[runtime.currentStageIdx]);
     refreshRunUI(true);
