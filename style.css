@@ -578,6 +578,37 @@ body.phase-cooldown { --accent: #bf5af2; }
   margin-top: 10px !important;
 }
 
+/* ===== Group Tabs ===== */
+.group-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  margin: 6px 0 12px;
+  padding: 2px 2px 4px;
+  scrollbar-width: none;
+}
+.group-tabs::-webkit-scrollbar { display: none; }
+.group-tab {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 18px;
+  background: rgba(120, 120, 128, 0.16);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-tab:active { transform: scale(0.96); }
+.group-tab.selected {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+}
+
 /* ===== Groups ===== */
 .groups-container {
   display: flex;

@@ -70,13 +70,15 @@ const PRESETS = {
 let state = {
   voice: true,
   sound: true,
-  groups: [defaultGroup()]
+  groups: [defaultGroup()],
+  lastRestDuration: DEFAULT_REST_DURATION
 };
 let runtime = null;       // 訓練時 runtime
 let editingStage = null;  // { groupId, stage }
 let editingGroupId = null;
 let user = null;
 let runStartedAt = 0;
+let selectedGroupId = null;  // 目前顯示中的群組 id（UI state，不同步）
 
 // ---------- DOM ----------
 const $ = (sel) => document.querySelector(sel);
@@ -88,6 +90,7 @@ const doneScreen = $("#doneScreen");
 const historyScreen = $("#historyScreen");
 
 const groupsContainer = $("#groupsContainer");
+const groupTabs = $("#groupTabs");
 const addGroupBtn = $("#addGroupBtn");
 const voiceToggle = $("#voiceToggle");
 const soundToggle = $("#soundToggle");
@@ -161,7 +164,8 @@ const STORAGE_KEY = "intervalTimer.fb.v1";
 function saveLocal() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      voice: state.voice, sound: state.sound, groups: state.groups
+      voice: state.voice, sound: state.sound, groups: state.groups,
+      lastRestDuration: state.lastRestDuration
     }));
   } catch (e) {}
 }
@@ -182,7 +186,8 @@ function persist() {
       try {
         showSync("同步中…");
         await saveSettings(user.uid, {
-          voice: state.voice, sound: state.sound, groups: state.groups
+          voice: state.voice, sound: state.sound, groups: state.groups,
+          lastRestDuration: state.lastRestDuration
         });
         showSync("已同步", true);
       } catch (e) {
@@ -271,15 +276,42 @@ async function init() {
 function hydrateUI() {
   voiceToggle.checked = state.voice;
   soundToggle.checked = state.sound;
+  // 確保 selectedGroupId 有效
+  if (!state.groups.find(g => g.id === selectedGroupId)) {
+    selectedGroupId = state.groups[0] ? state.groups[0].id : null;
+  }
   renderGroups();
   updateTotals();
 }
 
 // ---------- 渲染 ----------
 function renderGroups() {
+  renderGroupTabs();
   groupsContainer.innerHTML = "";
-  state.groups.forEach(group => {
+  const group = state.groups.find(g => g.id === selectedGroupId) || state.groups[0];
+  if (group) {
+    selectedGroupId = group.id;
     groupsContainer.appendChild(renderGroup(group));
+  }
+}
+
+function renderGroupTabs() {
+  groupTabs.innerHTML = "";
+  if (state.groups.length <= 1) {
+    groupTabs.hidden = true;
+    return;
+  }
+  groupTabs.hidden = false;
+  state.groups.forEach(g => {
+    const tab = document.createElement("button");
+    tab.className = "group-tab" + (g.id === selectedGroupId ? " selected" : "");
+    tab.textContent = g.name || "群組";
+    tab.title = g.name;
+    tab.addEventListener("click", () => {
+      selectedGroupId = g.id;
+      renderGroups();
+    });
+    groupTabs.appendChild(tab);
   });
 }
 
@@ -345,6 +377,8 @@ function renderGroup(group) {
     delBtn.addEventListener("click", () => {
       if (!confirm(`刪除群組「${group.name}」？`)) return;
       state.groups = state.groups.filter(g => g.id !== group.id);
+      // 切到第一個群組
+      if (state.groups.length) selectedGroupId = state.groups[0].id;
       persist();
       renderGroups();
       updateTotals();
@@ -365,17 +399,19 @@ function renderGroup(group) {
   // Actions
   const actions = document.createElement("div");
   actions.className = "group-stage-actions";
+  const restDur = state.lastRestDuration || DEFAULT_REST_DURATION;
   actions.innerHTML = `
     <button class="add-stage">＋ 階段</button>
-    <button class="rest-quick">＋ 休息 (${DEFAULT_REST_DURATION}s)</button>
+    <button class="rest-quick">＋ 休息 (${restDur}s)</button>
   `;
   actions.querySelector(".add-stage").addEventListener("click", () => openStageModal(group, null));
   actions.querySelector(".rest-quick").addEventListener("click", () => {
     const id = newStageId(group);
+    const dur = state.lastRestDuration || DEFAULT_REST_DURATION;
     group.stages.push({
       id,
       name: "休息",
-      duration: DEFAULT_REST_DURATION,
+      duration: dur,
       color: REST_COLOR,
       phase: "rest"
     });
@@ -472,15 +508,18 @@ function bindSetupEvents() {
   soundToggle.addEventListener("change", () => { state.sound = soundToggle.checked; persist(); });
 
   addGroupBtn.addEventListener("click", () => {
-    state.groups.push({
+    const restDur = state.lastRestDuration || DEFAULT_REST_DURATION;
+    const newG = {
       id: newGroupId(),
       name: `群組 ${state.groups.length + 1}`,
       rounds: 3,
       stages: [
         { id: 1, name: "高強度", duration: 30, color: "#ff453a", phase: "work" },
-        { id: 2, name: "休息", duration: DEFAULT_REST_DURATION, color: REST_COLOR, phase: "rest" }
+        { id: 2, name: "休息", duration: restDur, color: REST_COLOR, phase: "rest" }
       ]
-    });
+    };
+    state.groups.push(newG);
+    selectedGroupId = newG.id;  // 切到新群組
     persist();
     renderGroups();
     updateTotals();
@@ -508,6 +547,7 @@ function bindSetupEvents() {
         rounds: p.rounds,
         stages: p.stages.map((s, i) => ({ ...s, id: i + 1 }))
       }];
+      selectedGroupId = 1;
       persist();
       renderGroups();
       updateTotals();
@@ -593,6 +633,8 @@ function bindModalEvents() {
     } else {
       group.stages.push({ id: newStageId(group), name, duration, color, phase });
     }
+    // 記住手動設定的休息秒數
+    if (phase === "rest") state.lastRestDuration = duration;
     persist();
     renderGroups();
     updateTotals();
@@ -627,6 +669,7 @@ function bindModalEvents() {
     const idx = group.stages.findIndex(s => s.id === editingStage.id);
     if (idx >= 0) group.stages.splice(idx + 1, 0, newStage);
     else group.stages.push(newStage);
+    if (phase === "rest") state.lastRestDuration = duration;
     persist();
     renderGroups();
     updateTotals();
