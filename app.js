@@ -1,49 +1,62 @@
 /* =========================================================
  * 間歇運動計時器 (Firebase 雲端版)
- * 未登入：用 localStorage（同原版）
- * 登入後：設定與訓練紀錄存 Firestore，跨裝置同步
+ * 多群組結構：state.groups[]，每組 { name, stages, rounds }
+ * 未登入：localStorage；登入後：Firestore，跨裝置同步
  * ========================================================= */
 import {
-  signIn, signOut, onAuthChange, currentUser,
+  signIn, signOut, onAuthChange,
   loadSettings, saveSettings, logWorkout, listWorkouts, deleteWorkout
 } from "./firebase.js";
 
-// ---------- 預設與常數 ----------
+// ---------- 常數 ----------
 const COLORS = [
   "#ff453a", "#ff9500", "#ffd60a", "#34c759",
   "#5ac8fa", "#007aff", "#5856d6", "#af52de",
   "#ff2d55", "#a2845e", "#8e8e93", "#30d158"
 ];
+const DEFAULT_REST_DURATION = 15;
+const REST_COLOR = "#5ac8fa";
 
-const DEFAULT_STAGES = [
-  { id: 1, name: "高強度", duration: 30, color: "#ff453a", phase: "work" },
-  { id: 2, name: "休息", duration: 15, color: "#5ac8fa", phase: "rest" }
-];
+function defaultGroup(id = 1, name = "訓練") {
+  return {
+    id,
+    name,
+    rounds: 3,
+    stages: [
+      { id: 1, name: "高強度", duration: 30, color: "#ff453a", phase: "work" },
+      { id: 2, name: "休息", duration: DEFAULT_REST_DURATION, color: REST_COLOR, phase: "rest" }
+    ]
+  };
+}
 
 const PRESETS = {
   tabata: {
+    name: "Tabata",
     rounds: 8,
     stages: [
       { name: "全力", duration: 20, color: "#ff453a", phase: "work" },
-      { name: "休息", duration: 10, color: "#5ac8fa", phase: "rest" }
+      { name: "休息", duration: 10, color: REST_COLOR, phase: "rest" }
     ]
   },
   hiit: {
+    name: "HIIT",
     rounds: 6,
     stages: [
       { name: "高強度", duration: 40, color: "#ff453a", phase: "work" },
       { name: "中強度", duration: 20, color: "#ff9500", phase: "work" },
-      { name: "休息", duration: 30, color: "#5ac8fa", phase: "rest" }
+      { name: "休息", duration: 30, color: REST_COLOR, phase: "rest" }
     ]
   },
   emom: {
+    name: "EMOM",
     rounds: 10,
     stages: [
       { name: "動作", duration: 45, color: "#34c759", phase: "work" },
-      { name: "休息", duration: 15, color: "#5ac8fa", phase: "rest" }
+      { name: "休息", duration: 15, color: REST_COLOR, phase: "rest" }
     ]
   },
   warmup: {
+    name: "熱身",
     rounds: 1,
     stages: [
       { name: "熱身", duration: 60, color: "#ff9500", phase: "warmup" },
@@ -55,13 +68,13 @@ const PRESETS = {
 
 // ---------- 狀態 ----------
 let state = {
-  rounds: 3,
   voice: true,
   sound: true,
-  stages: [],
+  groups: [defaultGroup()]
 };
-let runtime = null;
-let editingStage = null;
+let runtime = null;       // 訓練時 runtime
+let editingStage = null;  // { groupId, stage }
+let editingGroupId = null;
 let user = null;
 let runStartedAt = 0;
 
@@ -74,14 +87,13 @@ const runScreen = $("#runScreen");
 const doneScreen = $("#doneScreen");
 const historyScreen = $("#historyScreen");
 
-const stagesList = $("#stagesList");
-const roundsInput = $("#roundsInput");
+const groupsContainer = $("#groupsContainer");
+const addGroupBtn = $("#addGroupBtn");
 const voiceToggle = $("#voiceToggle");
 const soundToggle = $("#soundToggle");
 const startBtn = $("#startBtn");
 const historyBtn = $("#historyBtn");
-const addStageBtn = $("#addStageBtn");
-const roundDurationEl = $("#roundDuration");
+const stageCount = $("#stageCount");
 const totalDurationEl = $("#totalDuration");
 
 const exitBtn = $("#exitBtn");
@@ -93,6 +105,7 @@ const timeRemainingEl = $("#timeRemaining");
 const runStageNameEl = $("#runStageName");
 const currentRoundEl = $("#currentRound");
 const totalRoundsEl = $("#totalRounds");
+const groupIndicatorEl = $("#groupIndicator");
 const nextStageHintEl = $("#nextStageHint");
 
 const doneSummary = $("#doneSummary");
@@ -124,12 +137,31 @@ const statTotal = $("#statTotal");
 const statStreak = $("#statStreak");
 const statWeek = $("#statWeek");
 
-// ---------- localStorage 後備 ----------
+// ---------- 資料 migration（舊版 stages/rounds → groups） ----------
+function migrate(s) {
+  if (!s) return null;
+  if (Array.isArray(s.groups) && s.groups.length) return s; // 已是新格式
+  if (Array.isArray(s.stages) && s.stages.length) {
+    return {
+      voice: s.voice ?? true,
+      sound: s.sound ?? true,
+      groups: [{
+        id: 1,
+        name: "訓練",
+        rounds: s.rounds ?? 3,
+        stages: s.stages.map((st, i) => ({ id: st.id ?? (i + 1), ...st }))
+      }]
+    };
+  }
+  return null;
+}
+
+// ---------- localStorage ----------
 const STORAGE_KEY = "intervalTimer.fb.v1";
 function saveLocal() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      rounds: state.rounds, voice: state.voice, sound: state.sound, stages: state.stages,
+      voice: state.voice, sound: state.sound, groups: state.groups
     }));
   } catch (e) {}
 }
@@ -137,9 +169,7 @@ function loadLocal() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.stages) || data.stages.length === 0) return null;
-    return data;
+    return migrate(JSON.parse(raw));
   } catch (e) { return null; }
 }
 
@@ -152,7 +182,7 @@ function persist() {
       try {
         showSync("同步中…");
         await saveSettings(user.uid, {
-          rounds: state.rounds, voice: state.voice, sound: state.sound, stages: state.stages,
+          voice: state.voice, sound: state.sound, groups: state.groups
         });
         showSync("已同步", true);
       } catch (e) {
@@ -162,40 +192,48 @@ function persist() {
     }, 600);
   }
 }
-
 function showSync(msg, fade = false) {
   syncStatus.textContent = msg;
   syncStatus.classList.remove("hidden");
   if (fade) setTimeout(() => syncStatus.classList.add("hidden"), 1800);
 }
 
+// ---------- ID helpers ----------
+function newGroupId() {
+  return (state.groups.reduce((m, g) => Math.max(m, g.id || 0), 0) || 0) + 1;
+}
+function newStageId(group) {
+  return (group.stages.reduce((m, s) => Math.max(m, s.id || 0), 0) || 0) + 1;
+}
+function ensureIds() {
+  let gid = 0;
+  state.groups.forEach(g => {
+    if (!g.id) g.id = ++gid; else gid = Math.max(gid, g.id);
+    let sid = 0;
+    g.stages.forEach(s => {
+      if (!s.id) s.id = ++sid; else sid = Math.max(sid, s.id);
+    });
+  });
+}
+
 // ---------- 初始化 ----------
 async function init() {
-  // 先用本地資料快速顯示
   const saved = loadLocal();
-  if (saved) {
-    state = { ...state, ...saved };
-  } else {
-    state.stages = DEFAULT_STAGES.map(s => ({ ...s }));
-  }
+  if (saved) state = { ...state, ...saved };
   ensureIds();
   hydrateUI();
-
   bindSetupEvents();
   bindRunEvents();
   bindModalEvents();
-  bindPresets();
   bindAuth();
   bindHistory();
   buildColorPicker();
 
-  // 預先觸發語音引擎
   if ("speechSynthesis" in window) {
     window.speechSynthesis.getVoices();
     window.speechSynthesis.onvoiceschanged = () => {};
   }
 
-  // 監聽登入狀態
   onAuthChange(async (u) => {
     user = u || null;
     if (u) {
@@ -204,24 +242,17 @@ async function init() {
       userAvatar.src = u.photoURL || "";
       userAvatar.alt = u.displayName || "";
       userName.textContent = u.displayName || u.email || "已登入";
-      // 雲端 → 本地（雲端優先）
       try {
         showSync("讀取雲端設定…");
-        const cloud = await loadSettings(u.uid);
-        if (cloud && Array.isArray(cloud.stages) && cloud.stages.length) {
-          state = {
-            rounds: cloud.rounds ?? state.rounds,
-            voice: cloud.voice ?? state.voice,
-            sound: cloud.sound ?? state.sound,
-            stages: cloud.stages
-          };
+        const cloud = migrate(await loadSettings(u.uid));
+        if (cloud && cloud.groups && cloud.groups.length) {
+          state = cloud;
           ensureIds();
           hydrateUI();
           showSync("已載入雲端設定", true);
         } else {
-          // 雲端沒資料 → 把目前的本地推上去
           await saveSettings(u.uid, {
-            rounds: state.rounds, voice: state.voice, sound: state.sound, stages: state.stages,
+            voice: state.voice, sound: state.sound, groups: state.groups
           });
           showSync("已建立雲端備份", true);
         }
@@ -237,48 +268,156 @@ async function init() {
   });
 }
 
-function ensureIds() {
-  let nextId = state.stages.reduce((m, s) => Math.max(m, s.id || 0), 0);
-  state.stages.forEach(s => { if (!s.id) s.id = ++nextId; });
-}
-
 function hydrateUI() {
-  roundsInput.value = state.rounds;
   voiceToggle.checked = state.voice;
   soundToggle.checked = state.sound;
-  renderStages();
+  renderGroups();
   updateTotals();
 }
 
-// ---------- 渲染階段 ----------
-function renderStages() {
-  stagesList.innerHTML = "";
-  state.stages.forEach((stage) => {
-    const li = document.createElement("li");
-    li.className = "stage-item";
-    li.draggable = true;
-    li.dataset.id = stage.id;
-    li.innerHTML = `
-      <span class="stage-color-dot" style="background:${stage.color}"></span>
-      <span class="stage-name"></span>
-      <span class="stage-time">${formatTime(stage.duration)}</span>
-      <span class="stage-handle" aria-label="拖曳">⋮⋮</span>
-    `;
-    li.querySelector(".stage-name").textContent = stage.name;
-    li.addEventListener("click", (e) => {
-      if (e.target.classList.contains("stage-handle")) return;
-      openStageModal(stage);
-    });
-    attachDragHandlers(li);
-    stagesList.appendChild(li);
+// ---------- 渲染 ----------
+function renderGroups() {
+  groupsContainer.innerHTML = "";
+  state.groups.forEach(group => {
+    groupsContainer.appendChild(renderGroup(group));
   });
 }
 
+function renderGroup(group) {
+  const card = document.createElement("div");
+  card.className = "group-card";
+  card.dataset.groupId = group.id;
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "group-header";
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "group-name";
+  nameInput.value = group.name;
+  nameInput.maxLength = 16;
+  nameInput.placeholder = "群組名稱";
+  nameInput.addEventListener("change", () => {
+    group.name = nameInput.value.trim() || "群組";
+    nameInput.value = group.name;
+    persist();
+  });
+  header.appendChild(nameInput);
+
+  // rounds stepper
+  const rounds = document.createElement("div");
+  rounds.className = "group-rounds";
+  rounds.innerHTML = `
+    <span>回合</span>
+    <div class="stepper">
+      <button class="stepper-btn" data-act="rounds-minus">−</button>
+      <input type="number" min="1" max="99" value="${group.rounds}" inputmode="numeric" />
+      <button class="stepper-btn" data-act="rounds-plus">＋</button>
+    </div>
+  `;
+  const roundsInput = rounds.querySelector("input");
+  rounds.querySelectorAll(".stepper-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const act = btn.dataset.act;
+      let v = +roundsInput.value;
+      v = act === "rounds-plus" ? v + 1 : v - 1;
+      group.rounds = clamp(v, 1, 99);
+      roundsInput.value = group.rounds;
+      persist();
+      updateTotals();
+    });
+  });
+  roundsInput.addEventListener("change", () => {
+    group.rounds = clamp(+roundsInput.value || 1, 1, 99);
+    roundsInput.value = group.rounds;
+    persist();
+    updateTotals();
+  });
+  header.appendChild(rounds);
+
+  // 刪除群組（只在 >1 個群組時顯示）
+  if (state.groups.length > 1) {
+    const delBtn = document.createElement("button");
+    delBtn.className = "group-delete-btn";
+    delBtn.textContent = "✕";
+    delBtn.title = "刪除群組";
+    delBtn.addEventListener("click", () => {
+      if (!confirm(`刪除群組「${group.name}」？`)) return;
+      state.groups = state.groups.filter(g => g.id !== group.id);
+      persist();
+      renderGroups();
+      updateTotals();
+    });
+    header.appendChild(delBtn);
+  }
+
+  card.appendChild(header);
+
+  // Stages list
+  const list = document.createElement("ul");
+  list.className = "stages-list";
+  group.stages.forEach(stage => {
+    list.appendChild(renderStageItem(group, stage));
+  });
+  card.appendChild(list);
+
+  // Actions
+  const actions = document.createElement("div");
+  actions.className = "group-stage-actions";
+  actions.innerHTML = `
+    <button class="add-stage">＋ 階段</button>
+    <button class="rest-quick">＋ 休息 (${DEFAULT_REST_DURATION}s)</button>
+  `;
+  actions.querySelector(".add-stage").addEventListener("click", () => openStageModal(group, null));
+  actions.querySelector(".rest-quick").addEventListener("click", () => {
+    const id = newStageId(group);
+    group.stages.push({
+      id,
+      name: "休息",
+      duration: DEFAULT_REST_DURATION,
+      color: REST_COLOR,
+      phase: "rest"
+    });
+    persist();
+    renderGroups();
+    updateTotals();
+  });
+  card.appendChild(actions);
+
+  return card;
+}
+
+function renderStageItem(group, stage) {
+  const li = document.createElement("li");
+  li.className = "stage-item";
+  li.draggable = true;
+  li.dataset.id = stage.id;
+  li.dataset.groupId = group.id;
+  li.innerHTML = `
+    <span class="stage-color-dot" style="background:${stage.color}"></span>
+    <span class="stage-name"></span>
+    <span class="stage-time">${formatTime(stage.duration)}</span>
+    <span class="stage-handle" aria-label="拖曳">⋮⋮</span>
+  `;
+  li.querySelector(".stage-name").textContent = stage.name;
+  li.addEventListener("click", (e) => {
+    if (e.target.classList.contains("stage-handle")) return;
+    openStageModal(group, stage);
+  });
+  attachDragHandlers(li);
+  return li;
+}
+
 function updateTotals() {
-  const perRound = state.stages.reduce((sum, s) => sum + s.duration, 0);
-  const total = perRound * state.rounds;
-  roundDurationEl.textContent = formatTime(perRound);
-  totalDurationEl.textContent = formatTime(total);
+  let stagesN = 0;
+  let totalSec = 0;
+  state.groups.forEach(g => {
+    stagesN += g.stages.length * g.rounds;
+    totalSec += g.stages.reduce((s, st) => s + st.duration, 0) * g.rounds;
+  });
+  stageCount.textContent = stagesN;
+  totalDurationEl.textContent = formatTime(totalSec);
 }
 
 function formatTime(sec) {
@@ -288,18 +427,18 @@ function formatTime(sec) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// ---------- 拖曳排序 ----------
-let dragSrcId = null;
+// ---------- 拖曳排序（同群組內） ----------
+let dragSrc = null; // {groupId, stageId}
 function attachDragHandlers(li) {
   li.addEventListener("dragstart", (e) => {
-    dragSrcId = Number(li.dataset.id);
+    dragSrc = { groupId: +li.dataset.groupId, stageId: +li.dataset.id };
     li.classList.add("dragging");
     e.dataTransfer.effectAllowed = "move";
   });
   li.addEventListener("dragend", () => {
     li.classList.remove("dragging");
     $$(".stage-item").forEach(el => el.classList.remove("drag-over"));
-    dragSrcId = null;
+    dragSrc = null;
   });
   li.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -309,95 +448,85 @@ function attachDragHandlers(li) {
   li.addEventListener("drop", (e) => {
     e.preventDefault();
     li.classList.remove("drag-over");
-    if (dragSrcId == null) return;
-    const targetId = Number(li.dataset.id);
-    if (targetId === dragSrcId) return;
-    const fromIdx = state.stages.findIndex(s => s.id === dragSrcId);
-    const toIdx = state.stages.findIndex(s => s.id === targetId);
+    if (!dragSrc) return;
+    const targetGroupId = +li.dataset.groupId;
+    const targetStageId = +li.dataset.id;
+    if (dragSrc.groupId !== targetGroupId) return; // 不跨群組
+    if (dragSrc.stageId === targetStageId) return;
+    const group = state.groups.find(g => g.id === targetGroupId);
+    if (!group) return;
+    const fromIdx = group.stages.findIndex(s => s.id === dragSrc.stageId);
+    const toIdx = group.stages.findIndex(s => s.id === targetStageId);
     if (fromIdx < 0 || toIdx < 0) return;
-    const [moved] = state.stages.splice(fromIdx, 1);
-    state.stages.splice(toIdx, 0, moved);
+    const [moved] = group.stages.splice(fromIdx, 1);
+    group.stages.splice(toIdx, 0, moved);
     persist();
-    renderStages();
+    renderGroups();
     updateTotals();
   });
 }
 
 // ---------- 設定畫面事件 ----------
 function bindSetupEvents() {
-  document.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener("click", () => {
-      const a = btn.dataset.action;
-      if (a === "rounds-plus") roundsInput.value = clamp(+roundsInput.value + 1, 1, 99);
-      if (a === "rounds-minus") roundsInput.value = clamp(+roundsInput.value - 1, 1, 99);
-      if (a === "dur-plus") stageDurationInput.value = clamp(+stageDurationInput.value + 5, 1, 3600);
-      if (a === "dur-minus") stageDurationInput.value = clamp(+stageDurationInput.value - 5, 1, 3600);
-      if (a === "rounds-plus" || a === "rounds-minus") {
-        state.rounds = +roundsInput.value;
-        persist();
-        updateTotals();
-      }
-    });
-  });
+  voiceToggle.addEventListener("change", () => { state.voice = voiceToggle.checked; persist(); });
+  soundToggle.addEventListener("change", () => { state.sound = soundToggle.checked; persist(); });
 
-  roundsInput.addEventListener("change", () => {
-    state.rounds = clamp(+roundsInput.value || 1, 1, 99);
-    roundsInput.value = state.rounds;
+  addGroupBtn.addEventListener("click", () => {
+    state.groups.push({
+      id: newGroupId(),
+      name: `群組 ${state.groups.length + 1}`,
+      rounds: 3,
+      stages: [
+        { id: 1, name: "高強度", duration: 30, color: "#ff453a", phase: "work" },
+        { id: 2, name: "休息", duration: DEFAULT_REST_DURATION, color: REST_COLOR, phase: "rest" }
+      ]
+    });
     persist();
+    renderGroups();
     updateTotals();
   });
 
-  voiceToggle.addEventListener("change", () => {
-    state.voice = voiceToggle.checked;
-    persist();
-  });
-  soundToggle.addEventListener("change", () => {
-    state.sound = soundToggle.checked;
-    persist();
-  });
-
-  addStageBtn.addEventListener("click", () => openStageModal(null));
-
   startBtn.addEventListener("click", () => {
-    if (state.stages.length === 0) {
-      alert("請至少新增一個階段");
-      return;
-    }
+    const totalStages = state.groups.reduce((s, g) => s + g.stages.length, 0);
+    if (totalStages === 0) { alert("請至少新增一個階段"); return; }
     unlockAudio();
     startRun();
   });
 
   historyBtn.addEventListener("click", openHistory);
-}
 
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-// ---------- 預設方案 ----------
-function bindPresets() {
+  // Presets — 套用後變成單一群組
   document.querySelectorAll(".preset-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      const p = PRESETS[btn.dataset.preset];
+      const key = btn.dataset.preset;
+      const p = PRESETS[key];
       if (!p) return;
       if (!confirm(`套用 ${btn.textContent} 預設？目前的設定會被覆蓋。`)) return;
-      state.rounds = p.rounds;
-      state.stages = p.stages.map((s, i) => ({ ...s, id: i + 1 }));
-      roundsInput.value = state.rounds;
+      state.groups = [{
+        id: 1,
+        name: p.name,
+        rounds: p.rounds,
+        stages: p.stages.map((s, i) => ({ ...s, id: i + 1 }))
+      }];
       persist();
-      renderStages();
+      renderGroups();
       updateTotals();
     });
   });
 }
 
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
 // ---------- Stage Modal ----------
-function openStageModal(stage) {
-  editingStage = stage;
+function openStageModal(group, stage) {
+  editingGroupId = group ? group.id : null;
+  editingStage = stage || null;
   if (stage) {
     stageModalTitle.textContent = "編輯階段";
     stageNameInput.value = stage.name;
     stageDurationInput.value = stage.duration;
     selectColor(stage.color);
-    stageDeleteBtn.hidden = state.stages.length <= 1;
+    stageDeleteBtn.hidden = group.stages.length <= 1 && state.groups.length === 1;
     stageDuplicateBtn.hidden = false;
   } else {
     stageModalTitle.textContent = "新增階段";
@@ -414,6 +543,7 @@ function openStageModal(stage) {
 function closeStageModal() {
   stageModal.hidden = true;
   editingStage = null;
+  editingGroupId = null;
 }
 
 function buildColorPicker() {
@@ -428,9 +558,7 @@ function buildColorPicker() {
   });
 }
 function selectColor(c) {
-  $$(".color-swatch").forEach(el => {
-    el.classList.toggle("selected", el.dataset.color === c);
-  });
+  $$(".color-swatch").forEach(el => el.classList.toggle("selected", el.dataset.color === c));
 }
 function getSelectedColor() {
   const sel = $(".color-swatch.selected");
@@ -438,12 +566,21 @@ function getSelectedColor() {
 }
 
 function bindModalEvents() {
-  stageCancelBtn.addEventListener("click", closeStageModal);
-  stageModal.addEventListener("click", (e) => {
-    if (e.target === stageModal) closeStageModal();
+  // Stepper buttons inside modal
+  document.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const a = btn.dataset.action;
+      if (a === "dur-plus") stageDurationInput.value = clamp(+stageDurationInput.value + 5, 1, 3600);
+      if (a === "dur-minus") stageDurationInput.value = clamp(+stageDurationInput.value - 5, 1, 3600);
+    });
   });
 
+  stageCancelBtn.addEventListener("click", closeStageModal);
+  stageModal.addEventListener("click", (e) => { if (e.target === stageModal) closeStageModal(); });
+
   stageSaveBtn.addEventListener("click", () => {
+    const group = state.groups.find(g => g.id === editingGroupId);
+    if (!group) return closeStageModal();
     const name = stageNameInput.value.trim() || "階段";
     const duration = clamp(+stageDurationInput.value || 30, 1, 3600);
     const color = getSelectedColor();
@@ -454,42 +591,44 @@ function bindModalEvents() {
       editingStage.color = color;
       editingStage.phase = phase;
     } else {
-      const id = (state.stages.reduce((m, s) => Math.max(m, s.id), 0) || 0) + 1;
-      state.stages.push({ id, name, duration, color, phase });
+      group.stages.push({ id: newStageId(group), name, duration, color, phase });
     }
     persist();
-    renderStages();
+    renderGroups();
     updateTotals();
     closeStageModal();
   });
 
   stageDeleteBtn.addEventListener("click", () => {
     if (!editingStage) return;
-    if (state.stages.length <= 1) return;
-    state.stages = state.stages.filter(s => s.id !== editingStage.id);
+    const group = state.groups.find(g => g.id === editingGroupId);
+    if (!group) return;
+    if (group.stages.length <= 1 && state.groups.length === 1) return;
+    group.stages = group.stages.filter(s => s.id !== editingStage.id);
+    // 若群組變空且還有其他群組，移除空群組
+    if (group.stages.length === 0 && state.groups.length > 1) {
+      state.groups = state.groups.filter(g => g.id !== group.id);
+    }
     persist();
-    renderStages();
+    renderGroups();
     updateTotals();
     closeStageModal();
   });
 
   stageDuplicateBtn.addEventListener("click", () => {
     if (!editingStage) return;
-    // 用目前 modal 上的值作為複製來源（未存的編輯也會被帶過去）
+    const group = state.groups.find(g => g.id === editingGroupId);
+    if (!group) return;
     const name = stageNameInput.value.trim() || editingStage.name;
     const duration = clamp(+stageDurationInput.value || editingStage.duration, 1, 3600);
     const color = getSelectedColor();
     const phase = inferPhase(name, color);
-    const id = (state.stages.reduce((m, s) => Math.max(m, s.id), 0) || 0) + 1;
-    const newStage = { id, name, duration, color, phase };
-    const idx = state.stages.findIndex(s => s.id === editingStage.id);
-    if (idx >= 0) {
-      state.stages.splice(idx + 1, 0, newStage);
-    } else {
-      state.stages.push(newStage);
-    }
+    const newStage = { id: newStageId(group), name, duration, color, phase };
+    const idx = group.stages.findIndex(s => s.id === editingStage.id);
+    if (idx >= 0) group.stages.splice(idx + 1, 0, newStage);
+    else group.stages.push(newStage);
     persist();
-    renderStages();
+    renderGroups();
     updateTotals();
     closeStageModal();
   });
@@ -499,13 +638,13 @@ function inferPhase(name, color) {
   if (/休|rest|recover/i.test(name)) return "rest";
   if (/熱身|warm/i.test(name)) return "warmup";
   if (/緩|cool|收/i.test(name)) return "cooldown";
-  if (color === "#5ac8fa" || color === "#007aff") return "rest";
+  if (color === REST_COLOR || color === "#007aff") return "rest";
   if (color === "#ff9500" || color === "#ffd60a") return "warmup";
   return "work";
 }
 
 // ===========================================================
-//  音效（Web Audio API）
+//  音效
 // ===========================================================
 let audioCtx = null;
 function getCtx() {
@@ -583,11 +722,22 @@ function speak(text) {
 // ===========================================================
 //  執行
 // ===========================================================
+function getCurrentGroup() { return state.groups[runtime.currentGroupIdx]; }
+function getCurrentStage() { return getCurrentGroup().stages[runtime.currentStageIdx]; }
+
+function isAbsoluteLastPos(groupIdx, round, stageIdx) {
+  if (groupIdx !== state.groups.length - 1) return false;
+  const g = state.groups[groupIdx];
+  if (round !== g.rounds) return false;
+  return stageIdx === g.stages.length - 1;
+}
+
 function startRun() {
   runtime = {
+    currentGroupIdx: 0,
     currentRound: 1,
     currentStageIdx: 0,
-    remaining: state.stages[0].duration,
+    remaining: state.groups[0].stages[0].duration,
     paused: false,
     tickerId: null,
     lastTick: 0,
@@ -597,9 +747,9 @@ function startRun() {
   };
   runStartedAt = Date.now();
   showScreen("run");
-  totalRoundsEl.textContent = state.rounds;
   refreshRunUI(true);
-  speakStageStart(state.stages[0]);
+  speakGroupStart(getCurrentGroup());
+  speakStageStart(getCurrentStage());
   bell();
   startTicker();
   keepAwake(true);
@@ -622,7 +772,7 @@ function tick(now) {
   runtime.lastTick = now;
   runtime.remaining -= dt;
 
-  const stage = state.stages[runtime.currentStageIdx];
+  const stage = getCurrentStage();
   const remSec = Math.ceil(runtime.remaining);
   const elapsed = stage.duration - runtime.remaining;
 
@@ -633,7 +783,7 @@ function tick(now) {
     }
   }
 
-  // 運動過半語音（只在 work 且階段 ≥ 20 秒，避免短階段太吵）
+  // 運動過半語音
   if (!runtime.halfAnnounced &&
       stage.phase === "work" &&
       stage.duration >= 20 &&
@@ -642,11 +792,13 @@ function tick(now) {
     speak("過半");
   }
 
-  // 休息/緩和快結束預告（剩 5 秒，且階段 ≥ 8 秒）
+  // 休息/緩和快結束預告（最後一階段不播）
+  const isLast = isAbsoluteLastPos(runtime.currentGroupIdx, runtime.currentRound, runtime.currentStageIdx);
   if (!runtime.endingSoonAnnounced &&
       (stage.phase === "rest" || stage.phase === "cooldown") &&
       stage.duration >= 8 &&
-      runtime.remaining <= 5 && runtime.remaining > 4) {
+      runtime.remaining <= 5 && runtime.remaining > 4 &&
+      !isLast) {
     runtime.endingSoonAnnounced = true;
     speak("準備");
   }
@@ -660,28 +812,52 @@ function tick(now) {
 }
 
 function advanceStage() {
-  const nextIdx = runtime.currentStageIdx + 1;
-  if (nextIdx >= state.stages.length) {
-    if (runtime.currentRound >= state.rounds) {
-      finishRun();
-      return;
+  let g = runtime.currentGroupIdx;
+  let r = runtime.currentRound;
+  let s = runtime.currentStageIdx + 1;
+  let group = state.groups[g];
+
+  if (s >= group.stages.length) {
+    r += 1;
+    s = 0;
+    if (r > group.rounds) {
+      g += 1;
+      r = 1;
+      if (g >= state.groups.length) {
+        finishRun();
+        return;
+      }
+      group = state.groups[g];
     }
-    runtime.currentRound += 1;
-    runtime.currentStageIdx = 0;
-  } else {
-    runtime.currentStageIdx = nextIdx;
   }
-  const stage = state.stages[runtime.currentStageIdx];
-  runtime.remaining = stage.duration;
+
+  const nextStage = group.stages[s];
+  // 最後一階段如為 rest 直接結束
+  if (isAbsoluteLastPos(g, r, s) && nextStage.phase === "rest") {
+    finishRun();
+    return;
+  }
+
+  const isNewGroup = g !== runtime.currentGroupIdx;
+  runtime.currentGroupIdx = g;
+  runtime.currentRound = r;
+  runtime.currentStageIdx = s;
+  runtime.remaining = nextStage.duration;
   runtime.announcedSecond = -1;
   runtime.halfAnnounced = false;
   runtime.endingSoonAnnounced = false;
   bell();
-  speakStageStart(stage);
+  if (isNewGroup) speakGroupStart(group);
+  speakStageStart(nextStage);
   refreshRunUI(true);
   runtime.tickerId = requestAnimationFrame(tick);
 }
 
+function speakGroupStart(group) {
+  if (!state.voice) return;
+  if (state.groups.length <= 1) return;
+  speak(`${group.name}`);
+}
 function speakStageStart(stage) {
   if (!state.voice) return;
   let prefix = "";
@@ -692,7 +868,8 @@ function speakStageStart(stage) {
 }
 
 function refreshRunUI() {
-  const stage = state.stages[runtime.currentStageIdx];
+  const group = getCurrentGroup();
+  const stage = getCurrentStage();
   const remaining = Math.max(0, runtime.remaining);
   const min = Math.floor(remaining / 60);
   const sec = Math.floor(remaining % 60);
@@ -700,6 +877,10 @@ function refreshRunUI() {
   runStageNameEl.textContent = stage.name;
   runStageNameEl.style.color = stage.color;
   currentRoundEl.textContent = runtime.currentRound;
+  totalRoundsEl.textContent = group.rounds;
+  groupIndicatorEl.textContent = state.groups.length > 1
+    ? `${group.name} (${runtime.currentGroupIdx + 1}/${state.groups.length})`
+    : "";
   const pct = remaining / stage.duration;
   ringProgress.style.strokeDashoffset = 578 * (1 - pct);
   ringProgress.style.stroke = stage.color;
@@ -708,10 +889,23 @@ function refreshRunUI() {
 }
 
 function getNextHint() {
-  const idx = runtime.currentStageIdx + 1;
-  if (idx < state.stages.length) return `下一階段：${state.stages[idx].name}`;
-  if (runtime.currentRound < state.rounds) return `下一回合：${state.stages[0].name}`;
-  return "最後一階段";
+  const g = runtime.currentGroupIdx;
+  const r = runtime.currentRound;
+  const s = runtime.currentStageIdx;
+  const group = state.groups[g];
+
+  // next stage in same round
+  if (s + 1 < group.stages.length) {
+    // 最後一階段如為 rest 會被跳過
+    const next = group.stages[s + 1];
+    if (isAbsoluteLastPos(g, r, s + 1) && next.phase === "rest") return "即將結束";
+    return `下一階段：${next.name}`;
+  }
+  // next round in same group
+  if (r < group.rounds) return `下一回合：${group.stages[0].name}`;
+  // next group
+  if (g + 1 < state.groups.length) return `下一群組：${state.groups[g + 1].name}`;
+  return "最後階段";
 }
 
 function togglePause() {
@@ -743,22 +937,27 @@ async function finishRun() {
   finishChord();
   speak("訓練完成");
   document.body.className = "";
-  const total = state.stages.reduce((s, x) => s + x.duration, 0) * state.rounds;
-  doneSummary.textContent = `總時間 ${formatTime(total)} · ${state.rounds} 回合`;
+  const total = state.groups.reduce((sum, g) =>
+    sum + g.stages.reduce((s, st) => s + st.duration, 0) * g.rounds, 0);
+  const totalRounds = state.groups.reduce((s, g) => s + g.rounds, 0);
+  doneSummary.textContent = `總時間 ${formatTime(total)} · ${totalRounds} 回合`;
   doneSaveStatus.textContent = "";
   runtime = null;
   keepAwake(false);
   showScreen("done");
 
-  // 寫入雲端紀錄
   if (user) {
     try {
       doneSaveStatus.textContent = "儲存到雲端…";
       await logWorkout(user.uid, {
         startedAt: runStartedAt,
         durationSec: total,
-        rounds: state.rounds,
-        stages: state.stages.map(s => ({ name: s.name, duration: s.duration, color: s.color, phase: s.phase })),
+        totalRounds,
+        groups: state.groups.map(g => ({
+          name: g.name,
+          rounds: g.rounds,
+          stages: g.stages.map(s => ({ name: s.name, duration: s.duration, color: s.color, phase: s.phase }))
+        })),
       });
       doneSaveStatus.textContent = "✓ 已記錄到雲端";
     } catch (e) {
@@ -773,25 +972,40 @@ async function finishRun() {
 function bindRunEvents() {
   pauseBtn.addEventListener("click", togglePause);
   exitBtn.addEventListener("click", exitRun);
+
   prevBtn.addEventListener("click", () => {
     if (!runtime) return;
-    if (runtime.remaining < state.stages[runtime.currentStageIdx].duration - 2) {
-      runtime.remaining = state.stages[runtime.currentStageIdx].duration;
-    } else if (runtime.currentStageIdx > 0) {
-      runtime.currentStageIdx -= 1;
-      runtime.remaining = state.stages[runtime.currentStageIdx].duration;
-    } else if (runtime.currentRound > 1) {
-      runtime.currentRound -= 1;
-      runtime.currentStageIdx = state.stages.length - 1;
-      runtime.remaining = state.stages[runtime.currentStageIdx].duration;
+    const stage = getCurrentStage();
+    // 若已經過 2 秒，先 reset 本階段
+    if (runtime.remaining < stage.duration - 2) {
+      runtime.remaining = stage.duration;
+    } else {
+      // 倒退
+      let g = runtime.currentGroupIdx;
+      let r = runtime.currentRound;
+      let s = runtime.currentStageIdx - 1;
+      if (s < 0) {
+        r -= 1;
+        if (r < 1) {
+          g -= 1;
+          if (g < 0) return;
+          r = state.groups[g].rounds;
+        }
+        s = state.groups[g].stages.length - 1;
+      }
+      runtime.currentGroupIdx = g;
+      runtime.currentRound = r;
+      runtime.currentStageIdx = s;
+      runtime.remaining = state.groups[g].stages[s].duration;
     }
     runtime.announcedSecond = -1;
     runtime.halfAnnounced = false;
     runtime.endingSoonAnnounced = false;
     bell();
-    speakStageStart(state.stages[runtime.currentStageIdx]);
+    speakStageStart(getCurrentStage());
     refreshRunUI(true);
   });
+
   nextBtn.addEventListener("click", () => {
     if (!runtime) return;
     runtime.remaining = 0;
@@ -819,23 +1033,17 @@ function showScreen(name) {
   window.scrollTo({ top: 0, behavior: "instant" });
 }
 
-// ---------- Wake Lock ----------
+// Wake Lock
 let wakeLock = null;
 async function keepAwake(on) {
   if (!("wakeLock" in navigator)) return;
   try {
-    if (on) {
-      wakeLock = await navigator.wakeLock.request("screen");
-    } else if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-    }
+    if (on) wakeLock = await navigator.wakeLock.request("screen");
+    else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
   } catch (e) {}
 }
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState === "visible" && runtime && !runtime.paused) {
-    keepAwake(true);
-  }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && runtime && !runtime.paused) keepAwake(true);
 });
 
 // ===========================================================
@@ -898,26 +1106,32 @@ function renderHistory(items) {
     return;
   }
   historyEmpty.hidden = true;
-
-  // 統計
   const totalSec = items.reduce((s, w) => s + (w.durationSec || 0), 0);
   statCount.textContent = items.length;
   statTotal.textContent = Math.round(totalSec / 60);
-
   const days = new Set(items.map(w => dateKey(w.completedAt)));
   statStreak.textContent = currentStreak(days);
-
   const weekStart = startOfWeek(new Date());
   const weekCount = items.filter(w => toDate(w.completedAt) >= weekStart).length;
   statWeek.textContent = weekCount;
 
-  // 列表
   historyList.innerHTML = "";
   items.forEach(w => {
     const li = document.createElement("li");
     li.className = "history-item";
     const d = toDate(w.completedAt);
-    const stagesStr = (w.stages || []).map(s => s.name).join(" → ");
+    // 新格式有 groups[], 舊格式只有 stages[]
+    let summary = "";
+    if (Array.isArray(w.groups) && w.groups.length) {
+      if (w.groups.length === 1) {
+        summary = w.groups[0].stages.map(s => s.name).join(" → ");
+      } else {
+        summary = w.groups.map(g => g.name).join(" / ");
+      }
+    } else if (Array.isArray(w.stages)) {
+      summary = w.stages.map(s => s.name).join(" → ");
+    } else summary = "訓練";
+    const roundsLabel = w.totalRounds ?? w.rounds ?? 1;
     li.innerHTML = `
       <div class="history-date">
         <span class="h-day"></span>
@@ -931,16 +1145,13 @@ function renderHistory(items) {
     `;
     li.querySelector(".h-day").textContent = formatDay(d);
     li.querySelector(".h-time").textContent = formatHM(d);
-    li.querySelector(".h-title").textContent = stagesStr || "訓練";
-    li.querySelector(".h-meta").textContent =
-      `${formatTime(w.durationSec || 0)} · ${w.rounds || 1} 回合`;
+    li.querySelector(".h-title").textContent = summary;
+    li.querySelector(".h-meta").textContent = `${formatTime(w.durationSec || 0)} · ${roundsLabel} 回合`;
     li.querySelector(".h-del").addEventListener("click", async (e) => {
       e.stopPropagation();
       if (!confirm("刪除這筆紀錄？")) return;
-      try {
-        await deleteWorkout(user.uid, w.id);
-        openHistory();
-      } catch (err) { alert("刪除失敗"); }
+      try { await deleteWorkout(user.uid, w.id); openHistory(); }
+      catch (err) { alert("刪除失敗"); }
     });
     historyList.appendChild(li);
   });
@@ -974,7 +1185,7 @@ function startOfWeek(d) {
   const x = new Date(d);
   x.setHours(0,0,0,0);
   const day = x.getDay();
-  const diff = (day === 0 ? 6 : day - 1); // 週一為一週開始
+  const diff = (day === 0 ? 6 : day - 1);
   x.setDate(x.getDate() - diff);
   return x;
 }
@@ -986,7 +1197,6 @@ function currentStreak(daySet) {
     n++;
     d.setDate(d.getDate() - 1);
   }
-  // 如果今天還沒做但昨天有 → 仍從昨天往前算（讓今天空著不歸零）
   if (n === 0) {
     const y = new Date(); y.setDate(y.getDate() - 1); y.setHours(0,0,0,0);
     if (daySet.has(`${y.getFullYear()}-${y.getMonth()}-${y.getDate()}`)) {
@@ -1000,5 +1210,4 @@ function currentStreak(daySet) {
   return n;
 }
 
-// Boot
 init();

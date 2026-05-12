@@ -32,15 +32,6 @@
       </header>
 
       <div class="card">
-        <div class="card-row">
-          <label for="roundsInput">循環回合</label>
-          <div class="stepper">
-            <button class="stepper-btn" data-action="rounds-minus" aria-label="減少">−</button>
-            <input id="roundsInput" type="number" min="1" max="99" value="3" inputmode="numeric" />
-            <button class="stepper-btn" data-action="rounds-plus" aria-label="增加">＋</button>
-          </div>
-        </div>
-        <div class="card-divider"></div>
         <div class="card-row toggle-row">
           <label for="voiceToggle">語音播報</label>
           <label class="switch">
@@ -59,18 +50,18 @@
       </div>
 
       <div class="section-header">
-        <h2>階段</h2>
-        <span class="hint">點擊編輯 · 拖曳排序</span>
+        <h2>群組</h2>
+        <span class="hint">每組可獨立設定回合</span>
       </div>
 
-      <ul id="stagesList" class="stages-list"></ul>
+      <div id="groupsContainer" class="groups-container"></div>
 
-      <button id="addStageBtn" class="btn-secondary">＋ 新增階段</button>
+      <button id="addGroupBtn" class="btn-secondary">＋ 新增群組</button>
 
       <div class="totals-card">
         <div>
-          <span class="totals-label">每回合</span>
-          <span id="roundDuration" class="totals-value">0:00</span>
+          <span class="totals-label">階段總數</span>
+          <span id="stageCount" class="totals-value">0</span>
         </div>
         <div>
           <span class="totals-label">總時間</span>
@@ -94,6 +85,7 @@
       <div class="run-top">
         <button id="exitBtn" class="icon-btn" aria-label="返回">✕</button>
         <div class="round-indicator">
+          <span id="groupIndicator"></span>
           回合 <span id="currentRound">1</span> / <span id="totalRounds">1</span>
         </div>
       </div>

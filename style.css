@@ -578,6 +578,103 @@ body.phase-cooldown { --accent: #bf5af2; }
   margin-top: 10px !important;
 }
 
+/* ===== Groups ===== */
+.groups-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 8px 0 12px;
+}
+.group-card {
+  background: var(--bg-elev);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--separator);
+  background: rgba(120, 120, 128, 0.06);
+}
+.group-name {
+  flex: 1;
+  font-size: 17px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  padding: 6px 4px;
+  min-width: 0;
+}
+.group-name:focus {
+  background: rgba(120, 120, 128, 0.1);
+  border-radius: 6px;
+}
+.group-rounds {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.group-rounds .stepper {
+  transform: scale(0.85);
+  transform-origin: right center;
+}
+.group-delete-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(120, 120, 128, 0.16);
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.group-delete-btn:active { background: var(--danger); color: #fff; }
+.group-card .stages-list {
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.group-card .stages-list:empty + .group-stage-actions {
+  border-top: none;
+}
+.group-card .stages-list:empty::after {
+  content: "尚無階段";
+  display: block;
+  text-align: center;
+  padding: 18px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+.group-stage-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--separator);
+}
+.group-stage-actions button {
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  background: rgba(120, 120, 128, 0.16);
+  color: var(--accent);
+  transition: background 0.15s;
+}
+.group-stage-actions button:active { background: rgba(120, 120, 128, 0.28); }
+.group-stage-actions .rest-quick { color: var(--rest, #5ac8fa); }
+
+#groupIndicator {
+  display: inline;
+}
+#groupIndicator:not(:empty)::after {
+  content: " · ";
+}
+
 /* ===== Auth area (header) ===== */
 .header-row {
   display: flex;
